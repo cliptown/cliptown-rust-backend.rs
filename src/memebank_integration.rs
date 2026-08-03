@@ -16,6 +16,7 @@ pub const MAX_IDEMPOTENCY_KEY_LENGTH: usize = 128;
 pub const MIN_IDEMPOTENCY_KEY_LENGTH: usize = 16;
 pub const DEFAULT_MAX_TRANSFER_LIFETIME_SECONDS: i64 = 7 * 24 * 60 * 60;
 pub const DEFAULT_MAX_SENSITIVE_AUTH_AGE_SECONDS: i64 = 10 * 60;
+pub const MAX_DELEGATED_TOKEN_LIFETIME_SECONDS: i64 = 5 * 60;
 pub const DEFAULT_MAX_CLOCK_SKEW_SECONDS: i64 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +138,7 @@ pub struct DelegatedAuthContext<'a> {
     pub acr: Option<&'a str>,
     pub amr: &'a [&'a str],
     pub auth_time_unix_seconds: Option<i64>,
+    pub issued_at_unix_seconds: i64,
     pub expires_at_unix_seconds: i64,
     pub session_active: bool,
 }
@@ -209,6 +211,7 @@ pub enum PolicyError {
     InvalidClock,
     InvalidIssuer,
     InvalidDelegation,
+    InvalidTokenLifetime,
     WrongAudience,
     WrongAuthorizedParty,
     MissingSession,
@@ -234,6 +237,7 @@ impl fmt::Display for PolicyError {
             Self::InvalidClock => "server clock is invalid",
             Self::InvalidIssuer => "delegated token issuer is invalid",
             Self::InvalidDelegation => "delegation lineage is invalid",
+            Self::InvalidTokenLifetime => "delegated token lifetime is invalid",
             Self::WrongAudience => "delegated token audience is invalid",
             Self::WrongAuthorizedParty => "delegated token client is invalid",
             Self::MissingSession => "delegated token is not session-bound",
@@ -270,10 +274,11 @@ pub fn authorize_operation<'a>(
     if !is_canonical_uuid(context.subject)
         || !is_portable_identifier(context.token_id, 1, 128)
         || !is_portable_identifier(context.parent_token_id, 1, 128)
+        || context.token_id == context.parent_token_id
     {
         return Err(PolicyError::InvalidDelegation);
     }
-    if context.audience != CLIPTOWN_AUDIENCE {
+    if context.audience != CLIPTOWN_AUDIIENCE {
         return Err(PolicyError::WrongAudience);
     }
     if context.authorized_party != MEMEBANK_CLIENT_ID {
@@ -284,6 +289,18 @@ pub fn authorize_operation<'a>(
     }
     if !context.session_active {
         return Err(PolicyError::InactiveSession);
+    }
+    let latest_allowed_issue_time = now_unix_seconds
+        .checked_add(policy.max_clock_skew_seconds)
+        .ok_or(PolicyError::InvalidClock)?;
+    let token_lifetime = context
+        .expires_at_unix_seconds
+        .checked_sub(context.issued_at_unix_seconds)
+        .ok_or(PolicyError::InvalidClock)?;
+    if context.issued_at_unix_seconds > latest_allowed_issue_time
+        || !(1..=MAX_DELEGATED_TOKEN_LIFETIME_SECONDS).contains(&token_lifetime)
+    {
+        return Err(PolicyError::InvalidTokenLifetime);
     }
     if context.expires_at_unix_seconds <= now_unix_seconds {
         return Err(PolicyError::ExpiredToken);
@@ -501,8 +518,9 @@ fn validate_delegation_policy(
     }
     if policy.expected_issuer.is_empty()
         || policy.expected_issuer != policy.expected_issuer.trim()
-        || policy.max_sensitive_auth_age_seconds <= 0
-        || !(0..=300).contains(&policy.max_clock_skew_seconds)
+        || !(1..=DEFAULT_MAX_SENSITIVE_AUTH_AGE_SECONDS)
+            .contains(&policy.max_sensitive_auth_age_seconds)
+        || !(0..=DEFAULT_MAX_CLOCK_SKEW_SECONDS).contains(&policy.max_clock_skew_seconds)
     {
         return Err(PolicyError::InvalidConfiguration);
     }
@@ -640,6 +658,7 @@ mod tests {
             acr: Some(LOA2_ACR),
             amr: &["pwd", "totp"],
             auth_time_unix_seconds: Some(NOW - 30),
+            issued_at_unix_seconds: NOW,
             expires_at_unix_seconds: NOW + 300,
             session_active: true,
         }
@@ -741,6 +760,53 @@ mod tests {
                 DelegationPolicy::new(ISSUER)
             ),
             Err(PolicyError::WrongScope)
+        );
+
+        let mut recursive = context(READ_SCOPE);
+        recursive.parent_token_id = recursive.token_id;
+        assert_eq!(
+            authorize_operation(
+                NOW,
+                recursive,
+                Operation::Get,
+                DelegationPolicy::new(ISSUER)
+            ),
+            Err(PolicyError::InvalidDelegation)
+        );
+
+        let mut overlong = context(READ_SCOPE);
+        overlong.expires_at_unix_seconds = NOW + 301;
+        assert_eq!(
+            authorize_operation(
+                NOW,
+                overlong,
+                Operation::Get,
+                DelegationPolicy::new(ISSUER)
+            ),
+            Err(PolicyError::InvalidTokenLifetime)
+        );
+
+        let mut future_issued = context(READ_SCOPE);
+        future_issued.issued_at_unix_seconds = NOW + 61;
+        assert_eq!(
+            authorize_operation(
+                NOW,
+                future_issued,
+                Operation::Get,
+                DelegationPolicy::new(ISSUER)
+            ),
+            Err(PolicyError::InvalidTokenLifetime)
+        );
+
+        let relaxed_policy = DelegationPolicy {
+            expected_issuer: ISSUER,
+            max_sensitive_auth_age_seconds:
+                DEFAULT_MAX_SENSITIVE_AUTH_AGE_SECONDS + 1,
+            max_clock_skew_seconds: DEFAULT_MAX_CLOCK_SKEW_SECONDS,
+        };
+        assert_eq!(
+            authorize_operation(NOW, context(READ_SCOPE), Operation::Get, relaxed_policy),
+            Err(PolicyError::InvalidConfiguration)
         );
     }
 
