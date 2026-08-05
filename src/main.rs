@@ -2,9 +2,9 @@ pub mod account_security;
 pub mod app_vault;
 pub mod encrypted_objects;
 pub mod entity;
-pub mod memebank_transfer;
 mod memebank_auth;
 mod memebank_routes;
+pub mod memebank_transfer;
 
 #[cfg(test)]
 #[path = "memebank_routes/headless_tests.rs"]
@@ -25,12 +25,12 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use memebank_auth::MemebankAuthenticator;
-use memebank_routes::AppState;
 #[cfg(test)]
 use chrono::{Duration, Utc};
+use memebank_auth::MemebankAuthenticator;
 #[cfg(test)]
 use memebank_routes::routes;
+use memebank_routes::AppState;
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseBackend, Statement};
 use serde::Serialize;
 use shared_auth_client::SharedAuthClient;
@@ -396,8 +396,6 @@ mod tests {
         assert!(!valid_service_credential(
             "0123456789abcdef0123456789abcdef\n"
         ));
-        assert!(valid_service_credential(
-            "0123456789abcdef0123456789abcdef"
-        ));
+        assert!(valid_service_credential("0123456789abcdef0123456789abcdef"));
     }
 }

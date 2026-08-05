@@ -106,10 +106,11 @@ pub struct Introspection {
 impl Introspection {
     pub fn has_scope(&self, required: &str) -> bool {
         self.active
-            && self
-                .scope
-                .as_deref()
-                .is_some_and(|scope| scope.split_ascii_whitespace().any(|value| value == required))
+            && self.scope.as_deref().is_some_and(|scope| {
+                scope
+                    .split_ascii_whitespace()
+                    .any(|value| value == required)
+            })
     }
 
     pub fn has_delegation_lineage(&self) -> bool {
@@ -314,10 +315,7 @@ fn required_credential<'a>(value: &'a str, field: &'static str) -> Result<&'a st
     Ok(value)
 }
 
-fn required_identifier<'a>(
-    value: &'a str,
-    field: &'static str,
-) -> Result<&'a str, ClientError> {
+fn required_identifier<'a>(value: &'a str, field: &'static str) -> Result<&'a str, ClientError> {
     if value.is_empty()
         || value.len() > MAX_IDENTIFIER_BYTES
         || !value.bytes().all(|byte| {
@@ -359,12 +357,12 @@ async fn decode_json<T: DeserializeOwned>(
 
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await? {
-        let next_len = body
-            .len()
-            .checked_add(chunk.len())
-            .ok_or(ClientError::ResponseTooLarge {
-                limit: max_response_bytes,
-            })?;
+        let next_len =
+            body.len()
+                .checked_add(chunk.len())
+                .ok_or(ClientError::ResponseTooLarge {
+                    limit: max_response_bytes,
+                })?;
         if next_len > max_response_bytes {
             return Err(ClientError::ResponseTooLarge {
                 limit: max_response_bytes,

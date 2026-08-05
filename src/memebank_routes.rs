@@ -19,9 +19,9 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration, FixedOffset, SecondsFormat, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseBackend,
-    DatabaseConnection, DatabaseTransaction, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, QuerySelect, Set, Statement, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseConnection,
+    DatabaseTransaction, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, QuerySelect, Set,
+    Statement, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -29,8 +29,7 @@ use uuid::Uuid;
 
 use crate::{
     entity::{
-        memebank_transfer as transfer_entity,
-        memebank_transfer_idempotency as idempotency_entity,
+        memebank_transfer as transfer_entity, memebank_transfer_idempotency as idempotency_entity,
     },
     memebank_auth::{AuthFailure, MemebankAuthenticator},
     memebank_transfer::{
@@ -93,8 +92,8 @@ struct CreateTransferWire {
 
 impl CreateTransferWire {
     fn normalize(&self) -> Result<(CreateTransferRequest, DateTime<FixedOffset>), ApiError> {
-        let expires_at = DateTime::parse_from_rfc3339(&self.expires_at)
-            .map_err(|_| ApiError::BadRequest)?;
+        let expires_at =
+            DateTime::parse_from_rfc3339(&self.expires_at).map_err(|_| ApiError::BadRequest)?;
         Ok((
             CreateTransferRequest {
                 contract_version: self.contract_version,
@@ -191,10 +190,9 @@ impl IntoResponse for ApiError {
             Self::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             Self::Conflict => (StatusCode::CONFLICT, "conflict"),
             Self::PayloadTooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large"),
-            Self::IncompatibleContract => (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "incompatible_contract",
-            ),
+            Self::IncompatibleContract => {
+                (StatusCode::UNPROCESSABLE_ENTITY, "incompatible_contract")
+            }
             Self::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable"),
         };
         (status, Json(ErrorResponse { error: code })).into_response()
@@ -217,7 +215,9 @@ async fn create_transfer(
     let now = Utc::now().fixed_offset();
     let digest = request_digest(&wire)?;
     let (request, expires_at) = wire.normalize()?;
-    request.validate(now.timestamp()).map_err(map_policy_error)?;
+    request
+        .validate(now.timestamp())
+        .map_err(map_policy_error)?;
     evaluate_idempotency(
         now.timestamp(),
         None,
@@ -233,13 +233,8 @@ async fn create_transfer(
     ensure_account(&transaction, subject_id).await?;
     lock_idempotency(&transaction, subject_id, idempotency_key).await?;
 
-    let existing = active_idempotency(
-        &transaction,
-        subject_id,
-        idempotency_key,
-        now.timestamp(),
-    )
-    .await?;
+    let existing =
+        active_idempotency(&transaction, subject_id, idempotency_key, now.timestamp()).await?;
     if let Some(existing) = existing {
         let binding = binding_from_model(&existing, &authorized.subject)?;
         match evaluate_idempotency(
@@ -258,7 +253,10 @@ async fn create_transfer(
                 let model = find_owned_transfer(&transaction, subject_id, transfer_id)
                     .await?
                     .ok_or(ApiError::Unavailable)?;
-                transaction.commit().await.map_err(|_| ApiError::Unavailable)?;
+                transaction
+                    .commit()
+                    .await
+                    .map_err(|_| ApiError::Unavailable)?;
                 let response = transfer_response(&model, now.timestamp())?;
                 return Ok((StatusCode::CREATED, Json(response)));
             }
@@ -267,16 +265,10 @@ async fn create_transfer(
     }
 
     let transfer_id = Uuid::new_v4();
-    let model = transfer_active_model(
-        transfer_id,
-        subject_id,
-        &wire,
-        expires_at.clone(),
-        now.clone(),
-    )
-    .insert(&transaction)
-    .await
-    .map_err(|_| ApiError::Unavailable)?;
+    let model = transfer_active_model(transfer_id, subject_id, &wire, expires_at, now)
+        .insert(&transaction)
+        .await
+        .map_err(|_| ApiError::Unavailable)?;
 
     insert_idempotency(
         &transaction,
@@ -287,12 +279,15 @@ async fn create_transfer(
         &digest,
         transfer_id,
         TransferState::Pending,
-        now.clone(),
+        now,
         expires_at,
     )
     .await?;
 
-    transaction.commit().await.map_err(|_| ApiError::Unavailable)?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| ApiError::Unavailable)?;
     let response = transfer_response(&model, now.timestamp())?;
     Ok((StatusCode::CREATED, Json(response)))
 }
@@ -326,13 +321,13 @@ async fn list_transfers(
         select = select.filter(transfer_entity::Column::Direction.eq(direction_value(direction)));
     }
     if let Some(state_filter) = query.state {
-        select = select.filter(state_condition(state_filter, now.clone()));
+        select = select.filter(state_condition(state_filter, now));
     }
     if let Some(cursor) = query.cursor.as_deref() {
         let cursor = decode_cursor(cursor)?;
         select = select.filter(
             Condition::any()
-                .add(transfer_entity::Column::CreatedAt.lt(cursor.created_at.clone()))
+                .add(transfer_entity::Column::CreatedAt.lt(cursor.created_at))
                 .add(
                     Condition::all()
                         .add(transfer_entity::Column::CreatedAt.eq(cursor.created_at))
@@ -356,7 +351,10 @@ async fn list_transfers(
         .iter()
         .map(|model| transfer_response(model, now.timestamp()))
         .collect::<Result<Vec<_>, _>>()?;
-    transaction.commit().await.map_err(|_| ApiError::Unavailable)?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| ApiError::Unavailable)?;
     Ok(Json(TransferPage { items, next_cursor }))
 }
 
@@ -377,7 +375,10 @@ async fn get_transfer(
     let model = find_owned_transfer(&transaction, subject_id, transfer_id)
         .await?
         .ok_or(ApiError::NotFound)?;
-    transaction.commit().await.map_err(|_| ApiError::Unavailable)?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| ApiError::Unavailable)?;
     Ok(Json(transfer_response(&model, now.timestamp())?))
 }
 
@@ -414,13 +415,8 @@ async fn acknowledge_transfer(
 
     let transaction = begin_subject_transaction(&state.database, subject_id).await?;
     lock_idempotency(&transaction, subject_id, idempotency_key).await?;
-    let existing = active_idempotency(
-        &transaction,
-        subject_id,
-        idempotency_key,
-        now.timestamp(),
-    )
-    .await?;
+    let existing =
+        active_idempotency(&transaction, subject_id, idempotency_key, now.timestamp()).await?;
     if let Some(existing) = existing {
         let binding = binding_from_model(&existing, &authorized.subject)?;
         match evaluate_idempotency(
@@ -439,7 +435,10 @@ async fn acknowledge_transfer(
                 let model = find_owned_transfer(&transaction, subject_id, replay_id)
                     .await?
                     .ok_or(ApiError::Unavailable)?;
-                transaction.commit().await.map_err(|_| ApiError::Unavailable)?;
+                transaction
+                    .commit()
+                    .await
+                    .map_err(|_| ApiError::Unavailable)?;
                 return Ok(Json(transfer_response(&model, now.timestamp())?));
             }
             IdempotencyDecision::New => return Err(ApiError::Unavailable),
@@ -462,8 +461,8 @@ async fn acknowledge_transfer(
     } else {
         let mut active = model.into_active_model();
         active.state = Set(state_value(target).to_owned());
-        active.updated_at = Set(now.clone());
-        active.acknowledged_at = Set(Some(now.clone()));
+        active.updated_at = Set(now);
+        active.acknowledged_at = Set(Some(now));
         active.cancelled_at = Set(None);
         active
             .update(&transaction)
@@ -480,11 +479,14 @@ async fn acknowledge_transfer(
         &digest,
         transfer_id,
         target,
-        now.clone(),
-        model.expires_at.clone(),
+        now,
+        model.expires_at,
     )
     .await?;
-    transaction.commit().await.map_err(|_| ApiError::Unavailable)?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| ApiError::Unavailable)?;
     Ok(Json(transfer_response(&model, now.timestamp())?))
 }
 
@@ -510,15 +512,18 @@ async fn cancel_transfer(
     if target != current {
         let mut active = model.into_active_model();
         active.state = Set(state_value(target).to_owned());
-        active.updated_at = Set(now.clone());
+        active.updated_at = Set(now);
         active.acknowledged_at = Set(None);
-        active.cancelled_at = Set((target == TransferState::Cancelled).then_some(now.clone()));
+        active.cancelled_at = Set((target == TransferState::Cancelled).then_some(now));
         active
             .update(&transaction)
             .await
             .map_err(|_| ApiError::Unavailable)?;
     }
-    transaction.commit().await.map_err(|_| ApiError::Unavailable)?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| ApiError::Unavailable)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -627,7 +632,7 @@ async fn insert_idempotency(
     now: DateTime<FixedOffset>,
     transfer_expires_at: DateTime<FixedOffset>,
 ) -> Result<(), ApiError> {
-    let policy_expiry = now.clone() + Duration::hours(IDEMPOTENCY_TTL_HOURS);
+    let policy_expiry = now + Duration::hours(IDEMPOTENCY_TTL_HOURS);
     let expires_at = transfer_expires_at.min(policy_expiry);
     idempotency_entity::ActiveModel {
         id: Set(Uuid::new_v4()),
@@ -693,11 +698,11 @@ fn transfer_active_model(
         metadata_nonce_base64: Set(metadata.map(|value| value.nonce.clone())),
         metadata_ciphertext_base64: Set(metadata.map(|value| value.ciphertext.clone())),
         metadata_associated_data_hash_base64: Set(
-            metadata.and_then(|value| value.associated_data_hash.clone()),
+            metadata.and_then(|value| value.associated_data_hash.clone())
         ),
         metadata_key_id: Set(metadata.map(|value| value.key_id.clone())),
         expires_at: Set(expires_at),
-        created_at: Set(now.clone()),
+        created_at: Set(now),
         updated_at: Set(now),
         acknowledged_at: Set(None),
         cancelled_at: Set(None),
@@ -968,9 +973,9 @@ mod tests {
             metadata_ciphertext_base64: None,
             metadata_associated_data_hash_base64: None,
             metadata_key_id: None,
-            expires_at: now.clone() + Duration::hours(1),
-            created_at: now.clone(),
-            updated_at: now.clone(),
+            expires_at: now + Duration::hours(1),
+            created_at: now,
+            updated_at: now,
             acknowledged_at: None,
             cancelled_at: None,
         };
@@ -978,7 +983,10 @@ mod tests {
         assert!(!encoded.contains(model.id.to_string().as_str()));
         let decoded = decode_cursor(&encoded).unwrap();
         assert_eq!(decoded.id, model.id);
-        assert_eq!(decoded.created_at.timestamp_micros(), now.timestamp_micros());
+        assert_eq!(
+            decoded.created_at.timestamp_micros(),
+            now.timestamp_micros()
+        );
     }
 
     #[test]
@@ -1020,14 +1028,14 @@ mod tests {
             metadata_ciphertext_base64: None,
             metadata_associated_data_hash_base64: None,
             metadata_key_id: None,
-            expires_at: now.clone() + Duration::hours(1),
-            created_at: now.clone(),
-            updated_at: now.clone(),
+            expires_at: now + Duration::hours(1),
+            created_at: now,
+            updated_at: now,
             acknowledged_at: None,
-            cancelled_at: Some(now.clone()),
+            cancelled_at: Some(now),
         };
-        let encoded = serde_json::to_string(&transfer_response(&model, now.timestamp()).unwrap())
-            .unwrap();
+        let encoded =
+            serde_json::to_string(&transfer_response(&model, now.timestamp()).unwrap()).unwrap();
         assert!(!encoded.contains("subject"));
         assert!(!encoded.contains("cancelled_at"));
     }

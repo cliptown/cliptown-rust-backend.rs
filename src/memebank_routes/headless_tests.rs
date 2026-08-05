@@ -1,4 +1,7 @@
-use std::{env, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    env,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     body::Body,
@@ -322,13 +325,11 @@ async fn call_json(
         builder = builder.header(name, value);
     }
     let request = builder
-        .body(Body::from(body.map(|value| value.to_string()).unwrap_or_default()))
+        .body(Body::from(
+            body.map(|value| value.to_string()).unwrap_or_default(),
+        ))
         .expect("test request");
-    let response = app
-        .clone()
-        .oneshot(request)
-        .await
-        .expect("router response");
+    let response = app.clone().oneshot(request).await.expect("router response");
     let status = response.status();
     let bytes = response
         .into_body()

@@ -12,8 +12,8 @@ use axum::http::{header::AUTHORIZATION, HeaderMap};
 use shared_auth_client::{ClientError, Introspection, SharedAuthClient};
 
 use crate::memebank_transfer::{
-    authorize_delegated_operation, AuthorizedSubject, DelegatedAuthorization,
-    DelegatedTokenPolicy, Operation, CLIPTOWN_API_AUDIENCE,
+    authorize_delegated_operation, AuthorizedSubject, DelegatedAuthorization, DelegatedTokenPolicy,
+    Operation, CLIPTOWN_API_AUDIENCE,
 };
 
 const MAX_BEARER_BYTES: usize = 16 * 1024;
@@ -93,14 +93,14 @@ fn delegated_bearer(headers: &HeaderMap) -> Result<&str, AuthFailure> {
         return Err(AuthFailure::Unauthorized);
     }
     let value = value.to_str().map_err(|_| AuthFailure::Unauthorized)?;
-    let (scheme, token) = value
-        .split_once(' ')
-        .ok_or(AuthFailure::Unauthorized)?;
+    let (scheme, token) = value.split_once(' ').ok_or(AuthFailure::Unauthorized)?;
     if !scheme.eq_ignore_ascii_case("bearer")
         || token.is_empty()
         || token.len() > MAX_BEARER_BYTES
         || token.trim() != token
-        || token.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+        || token
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
     {
         return Err(AuthFailure::Unauthorized);
     }
@@ -162,8 +162,7 @@ fn required(value: Option<String>) -> Result<String, AuthFailure> {
 }
 
 fn required_time(value: Option<u64>) -> Result<i64, AuthFailure> {
-    i64::try_from(value.ok_or(AuthFailure::Unauthorized)?)
-        .map_err(|_| AuthFailure::Unauthorized)
+    i64::try_from(value.ok_or(AuthFailure::Unauthorized)?).map_err(|_| AuthFailure::Unauthorized)
 }
 
 fn map_client_error(error: ClientError) -> AuthFailure {
@@ -184,7 +183,9 @@ fn valid_issuer(value: &str) -> bool {
     value.starts_with("https://")
         && value.len() <= 512
         && value.trim() == value
-        && !value.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+        && !value
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
 }
 
 fn now_unix_seconds() -> Result<i64, AuthFailure> {
