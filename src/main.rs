@@ -6,12 +6,16 @@ pub mod memebank_transfer;
 mod memebank_auth;
 mod memebank_routes;
 
+#[cfg(test)]
+#[path = "memebank_routes/headless_tests.rs"]
+mod memebank_headless_tests;
+
 use std::{
     env,
     error::Error,
     fmt,
     net::{IpAddr, SocketAddr},
-    time::Duration,
+    time::Duration as StdDuration,
 };
 
 use axum::{
@@ -23,6 +27,10 @@ use axum::{
 };
 use memebank_auth::MemebankAuthenticator;
 use memebank_routes::AppState;
+#[cfg(test)]
+use chrono::{Duration, Utc};
+#[cfg(test)]
+use memebank_routes::routes;
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseBackend, Statement};
 use serde::Serialize;
 use shared_auth_client::SharedAuthClient;
@@ -163,8 +171,8 @@ async fn run() -> Result<(), StartupError> {
     database_options
         .max_connections(database_max_connections)
         .min_connections(1)
-        .connect_timeout(Duration::from_secs(5))
-        .acquire_timeout(Duration::from_secs(5))
+        .connect_timeout(StdDuration::from_secs(5))
+        .acquire_timeout(StdDuration::from_secs(5))
         .sqlx_logging(false);
     let database = Database::connect(database_options)
         .await
