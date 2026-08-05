@@ -21,6 +21,22 @@ jobs:
         toolchain: ['1.88.0', stable]
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: cliptown_test
+          POSTGRES_USER: cliptown
+          POSTGRES_PASSWORD: cliptown_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U cliptown -d cliptown_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      CLIPTOWN_TEST_DATABASE_URL: postgres://cliptown:cliptown_test@127.0.0.1:5432/cliptown_test
     steps:
       - name: Check out backend
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -82,7 +98,7 @@ jobs:
         if: steps.clippy.outcome == 'failure'
         working-directory: cliptown-rust-backend.rs
         run: cat clippy.txt && exit 1
-      - name: Run all-target tests
+      - name: Run all-target tests, including headless MemeBank flow
         working-directory: cliptown-rust-backend.rs
         env:
           RUST_BACKTRACE: '1'
