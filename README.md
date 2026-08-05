@@ -1,6 +1,6 @@
 # ClipTown Rust backend
 
-Rust API service for encrypted ClipTown synchronization. The current foundation exposes service information, liveness, and readiness contracts. DEN-42/DEN-44/DEN-45/DEN-47/DEN-51 add reviewed account-security, Signal Protocol relay, isolated application-vault, PostgreSQL/Supabase, and encrypted Cloudflare R2 foundations without enabling unauthenticated placeholder routes.
+Rust API service for encrypted ClipTown synchronization. The service exposes service information, liveness, database-aware readiness, and the authenticated subject-owned MemeBank transfer API. DEN-42/DEN-44/DEN-45/DEN-47/DEN-51 add reviewed account-security, Signal Protocol relay, isolated application-vault, PostgreSQL/Supabase, and encrypted Cloudflare R2 foundations without enabling unauthenticated placeholder routes.
 
 ## Security model
 
@@ -17,21 +17,32 @@ Rust API service for encrypted ClipTown synchronization. The current foundation 
 
 ## MemeBank delegated transfer boundary
 
-DEN-1578 defines the backend enforcement and PostgreSQL/RLS desired state for the versioned MemeBank transfer API. The domain accepts only normalized output from protected shared-auth verification and pins the issuer, sole `cliptown-api` audience, `memebank-api` authorized party, active session, delegation lineage, and exactly one `cliptown:memebank:*` operation scope. Write and delete require recent LOA2.
+DEN-1578 defines the backend enforcement and PostgreSQL/RLS desired state for the versioned MemeBank transfer API. DEN-2259 connects that reviewed policy to authenticated Axum routes, protected shared-auth introspection, SeaORM/PostgreSQL persistence, and a headless database-backed flow.
 
-The transfer queue stores ciphertext plus bounded routing and integrity metadata. Create and acknowledgement idempotency are subject, route, operation, and digest bound; cross-subject access is indistinguishable from absence; terminal records cannot be reopened. The schema enables RLS for both transfer tables and revokes public access.
+The API accepts only normalized output from protected shared-auth verification and pins the issuer, sole `cliptown-api` audience, `memebank-api` authorized party, active session, distinct current/parent delegation lineage, and exactly one `cliptown:memebank:*` operation scope. Write and delete require recent LOA2. A factor ceremony reaches ClipTown only as normalized shared-auth assurance; the routes reject direct 3FA artifacts and app-presence signals.
 
-The enforcement tests cover valid delegated read/write/delete operations plus issuer, audience, client, session, lineage, time, scope, assurance, ciphertext shape, contract version, retention, ownership, idempotency, state-transition, cancellation, cursor, and exact cipher wire-format failures. Separate schema tests lock the ciphertext-only columns, subject RLS policies, public revocations, size/retention constraints, and absence of credential, plaintext, local-path, deep-link, and app-presence fields.
+The transfer queue stores ciphertext plus bounded routing and integrity metadata. Create and acknowledgement idempotency are subject, route, operation, and digest bound; concurrent use of one key is serialized with a PostgreSQL transaction advisory lock; cross-subject access is indistinguishable from absence; terminal records cannot be reopened. The schema enables RLS for both transfer tables and revokes public access.
 
-No MemeBank Axum route is mounted yet. Route wiring remains fail-closed until the coordinated shared-auth delegation implementation is available and can be connected through a revocation-aware verifier. The interim service therefore cannot fall back to a raw bearer, service-wide credential, 3FA-specific proof, app-presence check, deep link, local IPC, or clipboard transport.
+MemeBank and ClipTown interoperate through the versioned HTTPS API and official SDKs. The route tree has no dependency on mutually installed phone apps, deep links, local IPC, a loopback bridge, shared databases, shared cloud credentials, or clipboard monitoring. Native **Copy** remains a separate explicit foreground feature and is not a fallback transport.
+
+See [`docs/memebank-production-activation.md`](docs/memebank-production-activation.md) for routes, configuration, shared-auth and SDK provenance, migration ownership, validation, rollout, and rollback.
 
 ## Run
 
+The service fails closed unless its database and protected shared-auth settings are configured:
+
 ```sh
-CLIPTOWN_BIND_ADDRESS=127.0.0.1:3000 cargo run --locked
+DATABASE_URL=postgres://... \
+SHARED_AUTH_BASE_URL=https://gateway.example/shared-auth \
+SHARED_AUTH_ISSUER=https://auth.example \
+SHARED_AUTH_INTROSPECT_SECRET='from-secret-controller' \
+CLIPTOWN_BIND_ADDRESS=127.0.0.1:3000 \
+cargo run --locked
 ```
 
-The service does not run database migrations at startup. PostgreSQL desired state belongs in [`schema/schema.sql`](schema/schema.sql) and must be reviewed through the declarative migration workflow before deployment.
+`CLIPTOWN_DATABASE_MAX_CONNECTIONS` defaults to `16` and must be from 1 through 128.
+
+The service does not run database migrations at startup. PostgreSQL desired state belongs in [`schema/schema.sql`](schema/schema.sql) and must be reviewed through the declarative migration workflow before deployment. `/healthz` is process-local; `/readyz` verifies database access and the required MemeBank transfer tables.
 
 ## Validate
 
@@ -39,13 +50,15 @@ The service does not run database migrations at startup. PostgreSQL desired stat
 cargo metadata --locked --format-version 1 --no-deps
 cargo tree --locked -e normal,build -i rsa
 python3 scripts/check-security-schema.py
-cargo fmt --check
+cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked --all-targets
+CLIPTOWN_TEST_DATABASE_URL=postgres://... cargo test --locked --all-targets -- --nocapture
 cargo build --locked --release
 nix develop -c agent-check audit
 ```
 
-GitHub Actions runs the Rust checks against Rust 1.88 and stable. Both native and Nix CI resolve `cliptown-interfaces` at commit `ef3d5f55719e56b1a6f11d2d6464c0976aa1863d`, avoiding a moving sibling dependency while consuming the merged application-vault and external step-up contracts. The repository toolchain is pinned to the declared Rust 1.88 minimum required by the locked SeaORM/ICU/time dependency graph.
+GitHub Actions runs the Rust checks against Rust 1.88 and stable. Both native and Nix CI resolve `cliptown-interfaces` at commit `ef3d5f55719e56b1a6f11d2d6464c0976aa1863d`, avoiding a moving sibling dependency while consuming the merged application-vault, external step-up, and MemeBank transfer contracts. The repository toolchain is pinned to the declared Rust 1.88 minimum required by the locked SeaORM/ICU/time dependency graph.
+
+The build-local `vendor/shared-auth-client` directory records an immutable official SDK source commit and preserves the reviewed exact-audience introspection transport without requiring a reusable cross-organization Git credential. It is not a factor client or alternate authorization policy. See [`vendor/shared-auth-client/UPSTREAM.md`](vendor/shared-auth-client/UPSTREAM.md).
 
 SeaORM default features remain disabled because this service uses PostgreSQL only. The explicitly enabled JSON mapping is required for the reviewed application namespace policy, and its resolved dependency graph is committed in `Cargo.lock` so every `--locked` native and Nix build sees the same model. Cargo may retain optional SQLx MySQL/SQLite package metadata in the lockfile, but CI fails if `rsa`, `sqlx-mysql`, or `sqlx-sqlite` becomes reachable in the active normal/build dependency graph. RustSec advisory `RUSTSEC-2023-0071` is ignored only after that reachability proof; every other advisory remains fail-closed.
