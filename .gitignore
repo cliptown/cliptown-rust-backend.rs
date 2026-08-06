@@ -2,3 +2,7 @@
 .cache/
 .direnv/
 result
+tmp
+temp
+tmp/worktrees
+temp/worktrees
