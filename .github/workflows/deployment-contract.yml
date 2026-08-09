@@ -1,0 +1,75 @@
+name: Deployment contract
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - deploy/**
+      - k8s/**
+      - .github/workflows/deployment-contract.yml
+      - Cargo.toml
+      - Cargo.lock
+      - src/**
+      - vendor/**
+  push:
+    branches: [main]
+    paths:
+      - deploy/**
+      - k8s/**
+      - .github/workflows/deployment-contract.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deployment-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out backend
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: cliptown-rust-backend.rs
+          persist-credentials: false
+      - name: Check out pinned interfaces
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: cliptown/cliptown-interfaces
+          ref: 73151bb271c646248d2adca2acfd833dffa6c57a
+          path: cliptown-interfaces
+          persist-credentials: false
+      - name: Validate manifest policy
+        shell: bash
+        working-directory: cliptown-rust-backend.rs
+        run: |
+          set -Eeuo pipefail
+          grep -F 'runAsNonRoot: true' k8s/deployment.yaml
+          grep -F 'readOnlyRootFilesystem: true' k8s/deployment.yaml
+          grep -F 'allowPrivilegeEscalation: false' k8s/deployment.yaml
+          grep -F 'automountServiceAccountToken: false' k8s/deployment.yaml
+          grep -F 'path: /healthz' k8s/deployment.yaml
+          grep -F 'path: /readyz' k8s/deployment.yaml
+          grep -F 'secretKeyRef:' k8s/deployment.yaml
+          grep -F 'configMapKeyRef:' k8s/deployment.yaml
+          ! grep -RInE 'image:.*(:latest|:main|:master|:dev|:HEAD)$' k8s
+          ! grep -RInE '(password|token|secret|database-url):[[:space:]]+[^#[:space:]]+' k8s
+      - name: Build release image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker build \
+            --build-arg SOURCE_REVISION="$GITHUB_SHA" \
+            -f cliptown-rust-backend.rs/deploy/Dockerfile \
+            -t cliptown-api:contract .
+      - name: Inspect runtime image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(docker inspect --format '{{.Config.User}}' cliptown-api:contract)" = 'nonroot:nonroot'
+          test "$(docker inspect --format '{{json .Config.Entrypoint}}' cliptown-api:contract)" = '["/usr/local/bin/cliptown-api"]'
+          test "$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' cliptown-api:contract)" = "$GITHUB_SHA"
+          docker inspect --format '{{json .Config.ExposedPorts}}' cliptown-api:contract | grep -F '3000/tcp'

@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cliptown-api
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cliptown-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cliptown-api
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          # Live GitOps MUST replace this image through Argo CD kustomize.images
+          # with ghcr.io/cliptown/cliptown-rust-backend.rs@sha256:<64 hex>.
+          image: ghcr.io/cliptown/cliptown-rust-backend.rs:release-contract-placeholder
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: CLIPTOWN_BIND_ADDRESS
+              value: 0.0.0.0:3000
+            - name: CLIPTOWN_DATABASE_MAX_CONNECTIONS
+              value: "16"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cliptown-api-runtime
+                  key: database-url
+            - name: SHARED_AUTH_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: cliptown-api-runtime
+                  key: shared-auth-base-url
+            - name: SHARED_AUTH_ISSUER
+              valueFrom:
+                configMapKeyRef:
+                  name: cliptown-api-runtime
+                  key: shared-auth-issuer
+            - name: SHARED_AUTH_INTROSPECT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cliptown-api-runtime
+                  key: shared-auth-introspect-secret
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop: ["ALL"]

@@ -1,0 +1,108 @@
+name: Publish OCI image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/**
+      - k8s/**
+      - .github/workflows/release-oci.yml
+      - Cargo.toml
+      - Cargo.lock
+      - src/**
+      - vendor/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-cliptown-api-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out backend
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: cliptown-rust-backend.rs
+          persist-credentials: false
+      - name: Check out pinned interfaces
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: cliptown/cliptown-interfaces
+          ref: 73151bb271c646248d2adca2acfd833dffa6c57a
+          path: cliptown-interfaces
+          persist-credentials: false
+      - name: Log in to GHCR
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build and publish immutable source tag
+        id: publish
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tag="$image:$GITHUB_SHA"
+          docker build \
+            --build-arg SOURCE_REVISION="$GITHUB_SHA" \
+            -f cliptown-rust-backend.rs/deploy/Dockerfile \
+            -t "$tag" .
+          push_output="$(docker push "$tag")"
+          printf '%s\n' "$push_output"
+          digest="$(printf '%s\n' "$push_output" | sed -nE 's/.*digest: (sha256:[0-9a-f]{64}).*/\1/p' | tail -1)"
+          test -n "$digest"
+          printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+      - name: Verify remote digest and create evidence
+        shell: bash
+        env:
+          IMAGE: ${{ steps.publish.outputs.image }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          TAG: ${{ steps.publish.outputs.tag }}
+        run: |
+          set -Eeuo pipefail
+          docker pull "$IMAGE@$DIGEST"
+          resolved="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE@$DIGEST")"
+          test "$resolved" = "$IMAGE@$DIGEST"
+          revision="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE@$DIGEST")"
+          test "$revision" = "$GITHUB_SHA"
+          mkdir -p release-evidence
+          python3 - <<'PY'
+          import json, os, pathlib
+          evidence = {
+              "source_repository": os.environ["GITHUB_REPOSITORY"],
+              "source_sha": os.environ["GITHUB_SHA"],
+              "interfaces_sha": "73151bb271c646248d2adca2acfd833dffa6c57a",
+              "image": os.environ["IMAGE"],
+              "tag": os.environ["TAG"],
+              "digest": os.environ["DIGEST"],
+          }
+          pathlib.Path("release-evidence/oci.json").write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          {
+            echo '## ClipTown API OCI release'
+            echo
+            echo "- Source: \`$GITHUB_SHA\`"
+            echo "- Image: \`$IMAGE@$DIGEST\`"
+            echo '- GitOps must pin the digest above; the source tag is traceability only.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cliptown-api-oci-${{ github.sha }}
+          path: release-evidence/oci.json
+          if-no-files-found: error
+          retention-days: 30
