@@ -62,3 +62,46 @@ GitHub Actions runs the Rust checks against Rust 1.88 and stable. Both native an
 The build-local `vendor/shared-auth-client` directory records an immutable official SDK source commit and preserves the reviewed exact-audience introspection transport without requiring a reusable cross-organization Git credential. It is not a factor client or alternate authorization policy. See [`vendor/shared-auth-client/UPSTREAM.md`](vendor/shared-auth-client/UPSTREAM.md).
 
 SeaORM default features remain disabled because this service uses PostgreSQL only. The explicitly enabled JSON mapping is required for the reviewed application namespace policy, and its resolved dependency graph is committed in `Cargo.lock` so every `--locked` native and Nix build sees the same model. Cargo may retain optional SQLx MySQL/SQLite package metadata in the lockfile, but CI fails if `rsa`, `sqlx-mysql`, or `sqlx-sqlite` becomes reachable in the active normal/build dependency graph. RustSec advisory `RUSTSEC-2023-0071` is ignored only after that reachability proof; every other advisory remains fail-closed.
+
+## Cross-surface delivery
+
+A user-visible or contract-changing backend change must be evaluated for:
+
+- the live Flutter mobile/mobile-web/desktop app
+  [`cliptown/cliptown-flutter`](https://github.com/cliptown/cliptown-flutter);
+- the planned native GPUI desktop app `cliptown/cliptown-desktop.rs`;
+- the MemeBank pair `memebank/mbk-flutter` and `memebank/mbk-desktop.rs` when
+  local image-transfer or delegated-transfer behavior is affected; and
+- `cliptown-interfaces`, official clients, encrypted transfer manifests, route
+  types, Signal/device fixtures, and conformance tests.
+
+This is judgment-based coordination, not automatic UI parity. Server-only
+storage, migration, observability, and cryptographic hardening may remain
+backend-only. Native tray, global shortcut, clipboard-provider, filesystem,
+drag/drop, background service, and local image-rendering behavior may remain
+native-specific. Clipboard item semantics, sync, account/device state,
+application-vault rules, delegated transfers, errors, notifications,
+permissions, and navigation normally require coordinated changes or an
+explicit no-change rationale and parity follow-up.
+
+User-directed deep links are HTTPS-first:
+
+```text
+https://<verified-cliptown-owned-host>/open/<route>?<bounded-query>
+```
+
+with `cliptown://` fallback. Web/API fallback pages, Flutter, and GPUI must share
+versioned route types and fixtures and support cold start, already-running
+delivery, authentication resume, replay/expiry rejection, and browser fallback.
+Deep links are not a replacement for the versioned HTTPS/SDK MemeBank transfer
+API or native OS drag/drop/clipboard manifests.
+
+Clipboard contents, image/file bytes, private absolute paths, encryption keys,
+Signal material, 3FA proofs, transfer capabilities, bearer tokens, credentials,
+and private metadata are prohibited in URLs. Use bounded identifiers or
+short-lived, single-use, audience-bound handoff codes and validate route
+version, subject/device/item/transfer IDs, operation, authorization, limits,
+and explicit user intent.
+
+See [`docs/CROSS_SURFACE_DELIVERY.md`](docs/CROSS_SURFACE_DELIVERY.md) and the
+[portfolio policy](https://github.com/ORESoftware/project-registry/blob/main/docs/cross-surface-delivery.md).
