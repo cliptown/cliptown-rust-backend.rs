@@ -2,13 +2,27 @@
 """Fail closed when reviewed ClipTown security SQL boundaries drift."""
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "schema" / "schema.sql"
 MEMEBANK_SCHEMA = ROOT / "schema" / "memebank-integration.sql"
+PORTABLE_SCHEMA = ROOT / "schema" / "portable-backup.sql"
 text = SCHEMA.read_text(encoding="utf-8")
 memebank_text = MEMEBANK_SCHEMA.read_text(encoding="utf-8")
+portable_bytes = PORTABLE_SCHEMA.read_bytes()
+portable_text = portable_bytes.decode("utf-8")
+
+portable_sha256 = hashlib.sha256(portable_bytes).hexdigest()
+expected_portable_sha256 = (
+    "841e2914df5a14a675f746454d715929f7c2633d58343aa63fc519ac51a7faa7"
+)
+if portable_sha256 != expected_portable_sha256:
+    raise SystemExit(
+        "portable backup snapshot drifted from its reviewed shared-definitions revision: "
+        f"expected {expected_portable_sha256}, got {portable_sha256}"
+    )
 
 required = (
     "CREATE OR REPLACE FUNCTION cliptown.current_device_id()",
@@ -206,6 +220,31 @@ for invariant in (
     if invariant not in transfer:
         raise SystemExit(f"MemeBank transfer lost bounded invariant: {invariant}")
 
+for required_contract in (
+    "CREATE SCHEMA IF NOT EXISTS cliptown_backup",
+    "CREATE TABLE cliptown_backup.encrypted_clip_backups",
+    "CREATE TABLE cliptown_backup.encrypted_embedding_backups",
+    "CREATE TABLE cliptown_backup.encrypted_object_manifests",
+    "CREATE TABLE cliptown_backup.encrypted_object_chunks",
+    "vector_dimensions INT8 NOT NULL",
+    "expected_chunk_count INT8 NOT NULL",
+    "chunk_index INT8 NOT NULL",
+):
+    if required_contract not in portable_text:
+        raise SystemExit(f"portable backup lost cross-engine contract: {required_contract}")
+
+portable_lower = portable_text.lower()
+for forbidden in (
+    "plaintext_embedding",
+    "local_path",
+    "r2_credential",
+    "content_key",
+    "access_token",
+    "refresh_token",
+):
+    if forbidden in portable_lower:
+        raise SystemExit(f"portable backup leaked forbidden local material: {forbidden}")
+
 print(
-    "app-vault, external step-up, and MemeBank delegated-transfer boundaries are fail-closed"
+    "app-vault, external step-up, MemeBank, and portable backup boundaries are fail-closed"
 )

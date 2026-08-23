@@ -6,13 +6,18 @@ on:
     paths:
       - .github/workflows/portable-backup-contract.yml
       - docs/security-storage.md
+      - schema/portable-backup.sql
+      - schema/portable-backup.UPSTREAM.md
       - schema/schema.sql
       - scripts/check-security-schema.py
   push:
     branches: [main]
     paths:
       - .github/workflows/portable-backup-contract.yml
+      - schema/portable-backup.sql
+      - schema/portable-backup.UPSTREAM.md
       - schema/schema.sql
+      - scripts/check-security-schema.py
 
 permissions:
   contents: read
@@ -24,7 +29,8 @@ concurrency:
 env:
   DPM_REVISION: 027c81892cafc3693b550eaa74940a17b1705235
   SHARED_DEFS_REVISION: 148229d17e0d58bc34e106fbe7fd6a4d9d0272fd
-  PORTABLE_SCHEMA: k8s-libs-and-shared-defs/pg-defs/schema/databases/cliptown/portable-backup.sql
+  PORTABLE_SCHEMA: cliptown-rust-backend.rs/schema/portable-backup.sql
+  PORTABLE_SCHEMA_SHA256: 841e2914df5a14a675f746454d715929f7c2633d58343aa63fc519ac51a7faa7
 
 jobs:
   verify:
@@ -64,18 +70,18 @@ jobs:
           path: declarative-postgres-migrate.rs
           persist-credentials: false
           show-progress: false
-      - name: Check out exact shared definitions
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: ORESoftware/k8s-libs-and-shared-defs
-          ref: ${{ env.SHARED_DEFS_REVISION }}
-          path: k8s-libs-and-shared-defs
-          persist-credentials: false
-          show-progress: false
       - name: Set up Rust 1.88
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.88.0
+      - name: Verify vendored shared-definition snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf '%s  %s\n' "$PORTABLE_SCHEMA_SHA256" "$PORTABLE_SCHEMA" \
+            | sha256sum --check --strict
+          grep -F "$SHARED_DEFS_REVISION" \
+            cliptown-rust-backend.rs/schema/portable-backup.UPSTREAM.md
       - name: Start CockroachDB when selected
         if: matrix.engine == 'cockroachdb-25'
         shell: bash

@@ -8,6 +8,8 @@ The Rust service, PostgreSQL/Supabase, CockroachDB, and Cloudflare R2 are not tr
 
 Each desktop app owns an independent encrypted SQLite database and local search index. Text embeddings are fixed-width vectors stored and searched locally in SQLite; the cloud receives only an explicitly opted-in encrypted vector envelope and bounded dimensions. PostgreSQL/Supabase is the primary application desired state. The separate `cliptown_backup` schema from `ORESoftware/k8s-libs-and-shared-defs` is the portable PostgreSQL/CockroachDB backup desired state; both are converged by `declarative-migrations`, never by application-startup DDL.
 
+The shared-definitions repository remains authoritative. Because untrusted pull-request jobs cannot read that cross-organization private repository with `GITHUB_TOKEN`, this repository carries a byte-for-byte, SHA-256-pinned snapshot at `schema/portable-backup.sql`. Its provenance records an exact upstream revision, and CI rejects drift before running the pinned DPM revision against PostgreSQL 17 and CockroachDB 25. Updating the snapshot requires a reviewed upstream revision and fresh convergence evidence on both engines; it is not an independent schema fork.
+
 ## Device management
 
 Users can list, name, add, approve, suspend, and revoke devices. New devices remain pending until trusted-device QR/safety-number approval or an explicitly approved recovery flow. Revocation is terminal and must atomically block auth, prekey/mailbox operations, sync mutation acceptance, new R2 grants, and future wrapped-key fan-out.
