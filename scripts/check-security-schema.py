@@ -27,6 +27,13 @@ required = (
     "CREATE POLICY app_vault_mutations_active_device_select",
     "CREATE POLICY app_vault_mutations_active_device_insert",
     "CREATE POLICY app_vault_record_heads_active_device_select",
+    "CREATE TABLE IF NOT EXISTS cliptown.encrypted_embedding_backups",
+    "ALTER TABLE cliptown.encrypted_embedding_backups ENABLE ROW LEVEL SECURITY",
+    "CREATE POLICY encrypted_embedding_backups_owner_policy",
+    "ALTER TABLE cliptown.encrypted_object_chunks ENABLE ROW LEVEL SECURITY",
+    "CREATE POLICY encrypted_object_chunks_owner_policy",
+    "ALTER TABLE cliptown.object_wrapped_keys ENABLE ROW LEVEL SECURITY",
+    "CREATE POLICY object_wrapped_keys_owner_policy",
 )
 missing = [needle for needle in required if needle not in text]
 if missing:
@@ -100,6 +107,30 @@ if "FOR UPDATE OF challenge, proof" not in text:
     raise SystemExit("step-up consumption must lock the challenge and proof together")
 if "lifecycle_state = 'active'" not in text:
     raise SystemExit("device-gated policies must require an active device")
+
+embedding_backup = table_block("encrypted_embedding_backups")
+for field in (
+    "model_id_ciphertext_base64 text not null",
+    "vector_dimensions integer not null",
+    "vector_ciphertext_base64 text not null",
+    "nonce_base64 text not null",
+    "associated_data_hash_base64 text not null",
+    "key_id text not null",
+    "opted_in_at timestamptz not null",
+):
+    if field not in embedding_backup:
+        raise SystemExit(f"encrypted embedding backup lost ciphertext boundary: {field}")
+for forbidden in (
+    " model_id text ",
+    " embedding vector ",
+    " vector float",
+    " vector json",
+    " plaintext",
+    " local_path",
+    " r2_credential",
+):
+    if forbidden in embedding_backup:
+        raise SystemExit(f"encrypted embedding backup leaked local material: {forbidden.strip()}")
 
 memebank_required = (
     "CREATE TABLE IF NOT EXISTS cliptown.memebank_transfers",
