@@ -2,6 +2,11 @@
 pkgs.mkShell {
   packages =
     (with pkgs; [
+      # encrypted env files — env/enc/*.env.enc, see env/README.md
+      sops
+      age
+      python3
+      just
       actionlint
       binutils
       cacert
