@@ -5,6 +5,7 @@ pub mod entity;
 mod memebank_auth;
 mod memebank_routes;
 pub mod memebank_transfer;
+pub mod sync_protocol;
 
 #[cfg(test)]
 #[path = "memebank_routes/headless_tests.rs"]
