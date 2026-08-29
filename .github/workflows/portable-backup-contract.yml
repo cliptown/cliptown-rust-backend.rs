@@ -1,0 +1,135 @@
+name: Portable encrypted backup contract
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/portable-backup-contract.yml
+      - docs/security-storage.md
+      - schema/portable-backup.sql
+      - schema/portable-backup.UPSTREAM.md
+      - schema/schema.sql
+      - scripts/check-security-schema.py
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/portable-backup-contract.yml
+      - schema/portable-backup.sql
+      - schema/portable-backup.UPSTREAM.md
+      - schema/schema.sql
+      - scripts/check-security-schema.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portable-backup-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DPM_REVISION: 027c81892cafc3693b550eaa74940a17b1705235
+  SHARED_DEFS_REVISION: 148229d17e0d58bc34e106fbe7fd6a4d9d0272fd
+  PORTABLE_SCHEMA: cliptown-rust-backend.rs/schema/portable-backup.sql
+  PORTABLE_SCHEMA_SHA256: 841e2914df5a14a675f746454d715929f7c2633d58343aa63fc519ac51a7faa7
+
+jobs:
+  verify:
+    name: ${{ matrix.engine }} convergence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [postgresql-17, cockroachdb-25]
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: cliptown_backup_target
+          POSTGRES_USER: cliptown
+          POSTGRES_PASSWORD: cliptown_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U cliptown -d cliptown_backup_target"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - name: Check out backend
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: cliptown-rust-backend.rs
+          persist-credentials: false
+          show-progress: false
+      - name: Check out exact declarative-migrations source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: declarative-migrations/declarative-postgres-migrate.rs
+          ref: ${{ env.DPM_REVISION }}
+          path: declarative-postgres-migrate.rs
+          persist-credentials: false
+          show-progress: false
+      - name: Set up Rust 1.88
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.88.0
+      - name: Verify vendored shared-definition snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf '%s  %s\n' "$PORTABLE_SCHEMA_SHA256" "$PORTABLE_SCHEMA" \
+            | sha256sum --check --strict
+          grep -F "$SHARED_DEFS_REVISION" \
+            cliptown-rust-backend.rs/schema/portable-backup.UPSTREAM.md
+      - name: Start CockroachDB when selected
+        if: matrix.engine == 'cockroachdb-25'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker run --detach --name cliptown-cockroach \
+            --publish 26257:26257 --publish 8080:8080 \
+            cockroachdb/cockroach:v25.2.4 start-single-node --insecure
+          for attempt in $(seq 1 60); do
+            if docker exec cliptown-cockroach cockroach sql --insecure --execute 'SELECT 1' >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              docker logs cliptown-cockroach
+              exit 1
+            fi
+            sleep 2
+          done
+          docker exec cliptown-cockroach cockroach sql --insecure \
+            --execute 'CREATE DATABASE cliptown_backup_target'
+      - name: Select database URLs
+        id: database
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [ '${{ matrix.engine }}' = 'postgresql-17' ]; then
+            echo 'target=postgresql://cliptown:cliptown_test@127.0.0.1:5432/cliptown_backup_target' >> "$GITHUB_OUTPUT"
+            echo 'shadow=postgresql://cliptown:cliptown_test@127.0.0.1:5432/postgres' >> "$GITHUB_OUTPUT"
+          else
+            echo 'target=postgresql://root@127.0.0.1:26257/cliptown_backup_target?sslmode=disable' >> "$GITHUB_OUTPUT"
+            echo 'shadow=postgresql://root@127.0.0.1:26257/defaultdb?sslmode=disable' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Prove empty-target convergence by shadow replay
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cargo run --locked --release \
+            --manifest-path declarative-postgres-migrate.rs/Cargo.toml --bin dpm -- \
+            verify \
+            --source "$PORTABLE_SCHEMA" \
+            --target '${{ steps.database.outputs.target }}' \
+            --shadow '${{ steps.database.outputs.shadow }}' \
+            --schemas cliptown_backup 2>&1 | tee dpm-${{ matrix.engine }}.log
+      - name: Upload convergence evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: portable-backup-${{ matrix.engine }}-${{ github.sha }}
+          path: dpm-${{ matrix.engine }}.log
+          if-no-files-found: error
+          retention-days: 14
