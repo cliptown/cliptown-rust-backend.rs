@@ -48,6 +48,9 @@ const IDEMPOTENCY_TTL_HOURS: i64 = 24;
 
 #[derive(Clone)]
 pub struct AppState {
+    /// API-owned writer connection, not P1 access for a web or native client. Subject-scoped
+    /// transactions and RLS remain mandatory; a future web tier defaults to P2 and may receive
+    /// direct reads only through the distinct read-only contract in `docs/web-api-data-access.md`.
     pub database: DatabaseConnection,
     pub authenticator: MemebankAuthenticator,
 }
