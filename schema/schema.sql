@@ -189,6 +189,40 @@ CREATE TABLE IF NOT EXISTS cliptown.clips (
 CREATE INDEX IF NOT EXISTS clips_user_clock_idx
     ON cliptown.clips (user_id, logical_clock, id);
 
+-- Local SQLite remains the searchable source of truth for embeddings. Cloud
+-- backup is explicit opt-in and stores one device-encrypted vector envelope;
+-- neither PostgreSQL nor CockroachDB receives a plaintext model identifier or
+-- vector that could be searched server-side.
+CREATE TABLE IF NOT EXISTS cliptown.encrypted_embedding_backups (
+    user_id UUID NOT NULL REFERENCES cliptown.accounts(user_id) ON DELETE CASCADE,
+    clip_id UUID NOT NULL,
+    source_device_id UUID NOT NULL,
+    embedding_cipher_version TEXT NOT NULL CHECK (
+        embedding_cipher_version IN ('xchacha20poly1305-v1', 'aes-256-gcm-v1')
+    ),
+    model_id_ciphertext_base64 TEXT NOT NULL CHECK (
+        octet_length(model_id_ciphertext_base64) BETWEEN 24 AND 2732
+    ),
+    vector_dimensions INTEGER NOT NULL CHECK (vector_dimensions BETWEEN 1 AND 8192),
+    vector_ciphertext_base64 TEXT NOT NULL CHECK (
+        octet_length(vector_ciphertext_base64) BETWEEN 24 AND 89478488
+    ),
+    nonce_base64 TEXT NOT NULL CHECK (octet_length(nonce_base64) BETWEEN 16 AND 32),
+    associated_data_hash_base64 TEXT NOT NULL CHECK (
+        octet_length(associated_data_hash_base64) BETWEEN 43 AND 88
+    ),
+    key_id TEXT NOT NULL CHECK (char_length(key_id) BETWEEN 1 AND 128),
+    opted_in_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL CHECK (updated_at >= opted_in_at),
+    PRIMARY KEY (user_id, clip_id),
+    CONSTRAINT encrypted_embedding_backups_clip_fk FOREIGN KEY (user_id, clip_id)
+        REFERENCES cliptown.clips(user_id, id) ON DELETE CASCADE,
+    CONSTRAINT encrypted_embedding_backups_device_fk FOREIGN KEY (user_id, source_device_id)
+        REFERENCES cliptown.devices(user_id, id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS encrypted_embedding_backups_device_idx
+    ON cliptown.encrypted_embedding_backups (user_id, source_device_id, updated_at);
+
 CREATE TABLE IF NOT EXISTS cliptown.encrypted_objects (
     id UUID PRIMARY KEY,
     manifest_id UUID NOT NULL UNIQUE,
@@ -258,7 +292,10 @@ ALTER TABLE cliptown.recovery_channels ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cliptown.recovery_challenges ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cliptown.encrypted_recovery_packages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cliptown.clips ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cliptown.encrypted_embedding_backups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cliptown.encrypted_objects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cliptown.encrypted_object_chunks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cliptown.object_wrapped_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cliptown.object_upload_sessions ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS accounts_owner_policy ON cliptown.accounts;
@@ -291,10 +328,49 @@ CREATE POLICY clips_owner_policy ON cliptown.clips
     USING (user_id = cliptown.current_user_id())
     WITH CHECK (user_id = cliptown.current_user_id());
 
+DROP POLICY IF EXISTS encrypted_embedding_backups_owner_policy
+    ON cliptown.encrypted_embedding_backups;
+CREATE POLICY encrypted_embedding_backups_owner_policy
+    ON cliptown.encrypted_embedding_backups
+    USING (user_id = cliptown.current_user_id())
+    WITH CHECK (user_id = cliptown.current_user_id());
+
 DROP POLICY IF EXISTS encrypted_objects_owner_policy ON cliptown.encrypted_objects;
 CREATE POLICY encrypted_objects_owner_policy ON cliptown.encrypted_objects
     USING (user_id = cliptown.current_user_id())
     WITH CHECK (user_id = cliptown.current_user_id());
+
+DROP POLICY IF EXISTS encrypted_object_chunks_owner_policy
+    ON cliptown.encrypted_object_chunks;
+CREATE POLICY encrypted_object_chunks_owner_policy
+    ON cliptown.encrypted_object_chunks
+    USING (EXISTS (
+        SELECT 1
+        FROM cliptown.encrypted_objects AS object
+        WHERE object.id = object_id
+          AND object.user_id = cliptown.current_user_id()
+    ))
+    WITH CHECK (EXISTS (
+        SELECT 1
+        FROM cliptown.encrypted_objects AS object
+        WHERE object.id = object_id
+          AND object.user_id = cliptown.current_user_id()
+    ));
+
+DROP POLICY IF EXISTS object_wrapped_keys_owner_policy ON cliptown.object_wrapped_keys;
+CREATE POLICY object_wrapped_keys_owner_policy ON cliptown.object_wrapped_keys
+    USING (EXISTS (
+        SELECT 1
+        FROM cliptown.encrypted_objects AS object
+        WHERE object.id = object_id
+          AND object.user_id = cliptown.current_user_id()
+    ))
+    WITH CHECK (EXISTS (
+        SELECT 1
+        FROM cliptown.encrypted_objects AS object
+        WHERE object.id = object_id
+          AND object.user_id = cliptown.current_user_id()
+    ));
 
 DROP POLICY IF EXISTS object_upload_sessions_owner_policy ON cliptown.object_upload_sessions;
 CREATE POLICY object_upload_sessions_owner_policy ON cliptown.object_upload_sessions
