@@ -226,12 +226,7 @@ fn main() {
     let cases = cases();
     let mut sequences = 0;
     let mut transitions = 0;
-    explore(
-        &mut Vec::new(),
-        &cases,
-        &mut sequences,
-        &mut transitions,
-    );
+    explore(&mut Vec::new(), &cases, &mut sequences, &mut transitions);
     println!(
         "sync refinement: {sequences} sequences, {transitions} transitions, depth {MAX_DEPTH}; all invariants hold"
     );
