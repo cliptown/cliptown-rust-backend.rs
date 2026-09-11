@@ -79,6 +79,9 @@ jobs:
       - name: Validate app-vault security schema
         working-directory: cliptown-rust-backend.rs
         run: python3 scripts/check-security-schema.py
+      - name: Exhaust the replay-safe sync refinement
+        working-directory: cliptown-rust-backend.rs
+        run: cargo run --locked --bin sync-model-check
       - name: Check formatting
         working-directory: cliptown-rust-backend.rs
         run: cargo fmt --all --check
