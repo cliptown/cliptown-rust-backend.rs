@@ -26,9 +26,11 @@ _dec := justfile_directory() / "env" / "dec"
 _fmt := "--input-type dotenv --output-type dotenv"
 _dotenv := "python3 " + justfile_directory() / ".just" / "dotenv.py"
 
-# env/dec is runtime-only and deliberately absent from Git. Every public
-# env recipe depends on this bootstrap, including recipes that normally keep
-# plaintext in memory, so fresh clones have one filesystem contract.
+# env/dec is runtime-only and deliberately absent from Git. Runtime recipes
+# depend on this bootstrap, including recipes that normally keep plaintext in
+# memory, so fresh clones have one filesystem contract. The keyless env-check
+# audit is intentionally excluded: validation must remain pure and must not
+# create or mutate runtime state.
 [private]
 _env-dec:
     #!/usr/bin/env bash
@@ -222,7 +224,7 @@ env-keygen: _env-dec
 
 # Fail-closed audit: no plaintext in git, gitignore intact, ciphertext valid.
 [group('env')]
-env-check: _env-dec
+env-check:
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{ justfile_directory() }}

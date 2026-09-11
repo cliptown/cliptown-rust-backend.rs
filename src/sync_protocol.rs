@@ -58,6 +58,18 @@ pub struct ApplyResult {
     pub cursor: SyncCursor,
 }
 
+/// The explicit output of one pure sync-state transition.
+///
+/// The transport/persistence shell decides when to commit `next_state`. A
+/// rejected transition has no state value to commit, which makes the
+/// no-mutation-on-error guarantee visible in the type signature.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[must_use = "a sync transition has no effect until its next state is committed"]
+pub struct SyncTransition {
+    pub next_state: SyncEngine,
+    pub result: ApplyResult,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PullPage {
     pub mutations: Vec<SequencedMutation>,
@@ -114,46 +126,70 @@ impl SyncEngine {
         self.replay_index.len()
     }
 
-    pub fn apply(&mut self, mutation: SyncMutation) -> Result<ApplyResult, SyncError> {
+    /// Computes a transition without mutating the source state.
+    ///
+    /// This is the authoritative functional-core API. HTTP, database, and
+    /// peer-transport adapters can validate, log, or atomically persist the
+    /// returned next state before making it operational.
+    pub fn transitioned(&self, mutation: SyncMutation) -> Result<SyncTransition, SyncError> {
         validate_mutation(&mutation)?;
 
         if let Some(previous) = self.replay_index.get(&mutation.mutation_id) {
             if previous.mutation != mutation {
                 return Err(SyncError::IdempotencyConflict);
             }
-            return Ok(ApplyResult {
-                status: ApplyStatus::Replayed,
-                cursor: SyncCursor {
-                    server_sequence: previous.server_sequence,
+            return Ok(SyncTransition {
+                next_state: self.clone(),
+                result: ApplyResult {
+                    status: ApplyStatus::Replayed,
+                    cursor: SyncCursor {
+                        server_sequence: previous.server_sequence,
+                    },
                 },
             });
         }
 
-        self.server_sequence = self
+        let next_sequence = self
             .server_sequence
             .checked_add(1)
             .ok_or(SyncError::InvalidMutation("server sequence exhausted"))?;
         let sequenced = SequencedMutation {
-            server_sequence: self.server_sequence,
+            server_sequence: next_sequence,
             mutation,
         };
 
         let status = match self.records.get(&sequenced.mutation.object_id) {
             Some(current) if !wins_conflict(&sequenced, current) => ApplyStatus::Superseded,
-            _ => {
-                self.records
-                    .insert(sequenced.mutation.object_id.clone(), sequenced.clone());
-                ApplyStatus::Applied
-            }
+            _ => ApplyStatus::Applied,
         };
 
-        self.log.push(sequenced.clone());
-        self.remember_replay(sequenced);
+        let mut next_state = self.clone();
+        next_state.server_sequence = next_sequence;
+        if status == ApplyStatus::Applied {
+            next_state
+                .records
+                .insert(sequenced.mutation.object_id.clone(), sequenced.clone());
+        }
+        next_state.log.push(sequenced.clone());
+        next_state.remember_replay(sequenced);
 
-        Ok(ApplyResult {
-            status,
-            cursor: self.cursor(),
+        Ok(SyncTransition {
+            result: ApplyResult {
+                status,
+                cursor: next_state.cursor(),
+            },
+            next_state,
         })
+    }
+
+    /// Compatibility shell for callers that intentionally own mutable state.
+    ///
+    /// All decisions are made by [Self::transitioned]; this method performs
+    /// only the final commit after a successful pure transition.
+    pub fn apply(&mut self, mutation: SyncMutation) -> Result<ApplyResult, SyncError> {
+        let SyncTransition { next_state, result } = self.transitioned(mutation)?;
+        *self = next_state;
+        Ok(result)
     }
 
     pub fn pull(&self, after: SyncCursor, limit: usize) -> Result<PullPage, SyncError> {
@@ -359,6 +395,56 @@ mod tests {
             Err(SyncError::IdempotencyConflict)
         );
         assert_eq!(engine.cursor().server_sequence, 1);
+    }
+
+    #[test]
+    fn pure_transition_returns_next_state_without_mutating_source() {
+        let source = SyncEngine::new(8).unwrap();
+        let transition = source
+            .transitioned(upsert("mutation-1", 1, "device-a"))
+            .unwrap();
+
+        assert_eq!(source.cursor().server_sequence, 0);
+        assert!(source.record("clip-1").is_none());
+        assert_eq!(transition.result.status, ApplyStatus::Applied);
+        assert_eq!(transition.next_state.cursor().server_sequence, 1);
+        assert!(transition.next_state.record("clip-1").is_some());
+    }
+
+    #[test]
+    fn failed_mutable_shell_commit_preserves_the_complete_prior_state() {
+        let mut engine = SyncEngine::new(8).unwrap();
+        engine.apply(upsert("mutation-1", 1, "device-a")).unwrap();
+        let before = engine.clone();
+
+        let mut conflicting = upsert("mutation-1", 2, "device-a");
+        conflicting.kind = MutationKind::Tombstone;
+
+        assert_eq!(
+            engine.apply(conflicting),
+            Err(SyncError::IdempotencyConflict)
+        );
+        assert_eq!(engine, before);
+    }
+
+    #[test]
+    fn immutable_transitions_compose_with_try_fold() {
+        let mut mutations =
+            (1..=3).map(|index| upsert(&format!("mutation-{index}"), index, "device-a"));
+
+        let final_state = mutations
+            .try_fold(SyncEngine::new(8).unwrap(), |state, mutation| {
+                state
+                    .transitioned(mutation)
+                    .map(|transition| transition.next_state)
+            })
+            .unwrap();
+
+        assert_eq!(final_state.cursor().server_sequence, 3);
+        assert_eq!(
+            final_state.record("clip-1").unwrap().mutation.logical_clock,
+            3
+        );
     }
 
     #[test]
