@@ -115,3 +115,10 @@ in this tree:
 Those steps are deliberately **not** in the CI job. A toolchain install costs far
 more Actions minutes than the Python pass, and we are budget-conscious about
 runner time. Run them locally, and in the nightly job on the sibling `-test` org.
+
+### `RS008` — `&mut self` method returning unit
+
+*explicit outputs* · 1 occurrence at baseline
+
+Return the new state (or a typed transition) instead of mutating in place and returning `()`.
+
