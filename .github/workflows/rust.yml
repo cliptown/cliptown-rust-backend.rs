@@ -97,15 +97,15 @@ jobs:
           name: clippy-${{ matrix.toolchain }}
           path: cliptown-rust-backend.rs/clippy.txt
           if-no-files-found: error
-      - name: Enforce Clippy result
-        if: steps.clippy.outcome == 'failure'
-        working-directory: cliptown-rust-backend.rs
-        run: cat clippy.txt && exit 1
       - name: Run all-target tests, including headless MemeBank flow
         working-directory: cliptown-rust-backend.rs
         env:
           RUST_BACKTRACE: '1'
         run: cargo test --locked --all-targets -- --nocapture
+      - name: Enforce Clippy result
+        if: steps.clippy.outcome == 'failure'
+        working-directory: cliptown-rust-backend.rs
+        run: cat clippy.txt && exit 1
       - name: Build release binary
         working-directory: cliptown-rust-backend.rs
         run: cargo build --locked --release
