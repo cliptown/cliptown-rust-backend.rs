@@ -1,12 +1,11 @@
 # ClipTown Rust backend
 
-Rust API service for encrypted ClipTown synchronization. The service exposes service information, liveness, database-aware readiness, and the authenticated subject-owned MemeBank transfer API. DEN-42/DEN-44/DEN-45/DEN-47/DEN-51 add reviewed account-security, Signal Protocol relay, isolated application-vault, PostgreSQL/Supabase, and encrypted Cloudflare R2 foundations without enabling unauthenticated placeholder routes.
-Rust API service for encrypted ClipTown synchronization. The current foundation exposes service information, liveness, and readiness contracts. DEN-42/DEN-44/DEN-45/DEN-47/DEN-51 add reviewed account-security, Signal Protocol relay, isolated application-vault, PostgreSQL/Supabase, and encrypted Cloudflare R2 foundations without enabling unauthenticated placeholder routes. DEN-1578 adds the server-side policy and persistence foundation for the API-first MemeBank transfer contract; those routes remain unmounted until protected shared-auth verification and the reviewed storage adapter are wired.
+Rust API service for encrypted ClipTown synchronization. The service exposes service information, liveness, database-aware readiness, and the authenticated subject-owned MemeBank transfer API. DEN-42/DEN-44/DEN-45/DEN-47/DEN-51 add reviewed account-security, Signal Protocol relay, isolated application-vault, PostgreSQL/Supabase, portable PostgreSQL/CockroachDB backup, and encrypted Cloudflare R2 foundations without enabling unauthenticated placeholder routes. DEN-1578 adds the server-side policy and persistence foundation for the API-first MemeBank transfer contract.
 
 ## Security model
 
-- Flutter encrypts clipboard text, metadata, images, and files before upload.
-- PostgreSQL/Supabase and R2 store opaque ciphertext plus bounded routing/integrity metadata.
+- Flutter and Rust desktop clients encrypt clipboard text, metadata, images, files, and opted-in embedding backups before upload.
+- PostgreSQL/Supabase, CockroachDB, and R2 store opaque ciphertext plus bounded routing/integrity metadata; local SQLite remains the searchable source of truth.
 - Signal Protocol sessions enroll devices and deliver small wrapped account/clip/object/application-vault keys; large objects use chunked AEAD with random content keys.
 - 3FA authenticator records use a separate opaque application-vault trust domain and never become clipboard history, search, RAG, preview, paste, pin, notification, export, or ordinary retention data.
 - Application-vault logical clocks must fit PostgreSQL `BIGINT`, and backend policy may require a shorter proof lifetime than the five-minute wire-contract maximum.
@@ -60,8 +59,7 @@ cargo run --locked
 
 `CLIPTOWN_DATABASE_MAX_CONNECTIONS` defaults to `16` and must be from 1 through 128.
 
-The service does not run database migrations at startup. PostgreSQL desired state belongs in [`schema/schema.sql`](schema/schema.sql) and must be reviewed through the declarative migration workflow before deployment. `/healthz` is process-local; `/readyz` verifies database access and the required MemeBank transfer tables.
-The service does not run database migrations at startup. PostgreSQL desired state belongs in [`schema/schema.sql`](schema/schema.sql) plus reviewed additive fragments such as [`schema/memebank-integration.sql`](schema/memebank-integration.sql). Apply them in that order through the declarative migration workflow before deployment.
+The service does not run database migrations at startup. Primary PostgreSQL desired state belongs in [`schema/schema.sql`](schema/schema.sql) plus reviewed additive fragments such as [`schema/memebank-integration.sql`](schema/memebank-integration.sql). The portable encrypted-backup desired state is owned by `ORESoftware/k8s-libs-and-shared-defs` and must converge on real PostgreSQL and CockroachDB instances. Apply either contract only through the declarative migration workflow before deployment. `/healthz` is process-local; `/readyz` verifies database access and required runtime tables.
 
 ## Validate
 
@@ -73,13 +71,13 @@ cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
 CLIPTOWN_TEST_DATABASE_URL=postgres://... cargo test --locked --all-targets -- --nocapture
 cargo build --locked --release
+# CI also runs dpm verify against PostgreSQL 17 and CockroachDB 25.
 nix develop -c agent-check audit
 ```
 
 GitHub Actions runs the Rust checks against Rust 1.88 and stable. Both native and Nix CI resolve `cliptown-interfaces` at commit `ef3d5f55719e56b1a6f11d2d6464c0976aa1863d`, avoiding a moving sibling dependency while consuming the merged application-vault, external step-up, and MemeBank transfer contracts. The repository toolchain is pinned to the declared Rust 1.88 minimum required by the locked SeaORM/ICU/time dependency graph.
 
 The build-local `vendor/shared-auth-client` directory records an immutable official SDK source commit and preserves the reviewed exact-audience introspection transport without requiring a reusable cross-organization Git credential. It is not a factor client or alternate authorization policy. See [`vendor/shared-auth-client/UPSTREAM.md`](vendor/shared-auth-client/UPSTREAM.md).
-GitHub Actions runs the Rust checks against Rust 1.88 and stable. Both native and Nix CI resolve `cliptown-interfaces` at commit `ef3d5f55719e56b1a6f11d2d6464c0976aa1863d`, avoiding a moving sibling dependency while consuming the merged application-vault and external step-up contracts. The repository toolchain is pinned to the declared Rust 1.88 minimum required by the locked SeaORM/ICU/time dependency graph. Before the MemeBank handlers are mounted, CI must pin a released `cliptown-interfaces` revision containing the versioned MemeBank contract rather than consuming a moving PR branch.
 
 SeaORM default features remain disabled because this service uses PostgreSQL only. The explicitly enabled JSON mapping is required for the reviewed application namespace policy, and its resolved dependency graph is committed in `Cargo.lock` so every `--locked` native and Nix build sees the same model. Cargo may retain optional SQLx MySQL/SQLite package metadata in the lockfile, but CI fails if `rsa`, `sqlx-mysql`, or `sqlx-sqlite` becomes reachable in the active normal/build dependency graph. RustSec advisory `RUSTSEC-2023-0071` is ignored only after that reachability proof; every other advisory remains fail-closed.
 
@@ -87,19 +85,22 @@ SeaORM default features remain disabled because this service uses PostgreSQL onl
 
 A user-visible or contract-changing backend change must be evaluated for:
 
-- the live Flutter mobile/mobile-web/desktop app
+- the Flutter Android/iOS/mobile-web/Windows/macOS/Linux app
   [`cliptown/cliptown-flutter`](https://github.com/cliptown/cliptown-flutter);
-- the planned native GPUI desktop app `cliptown/cliptown-desktop.rs`;
+- the independently developed native Windows/macOS/Linux GPUI app
+  [`cliptown/cliptown-desktop.rs`](https://github.com/cliptown/cliptown-desktop.rs);
 - the MemeBank pair `memebank/mbk-flutter` and `memebank/mbk-desktop.rs` when
   local image-transfer or delegated-transfer behavior is affected; and
 - `cliptown-interfaces`, official clients, encrypted transfer manifests, route
   types, Signal/device fixtures, and conformance tests.
 
+The two desktop products are perpetual peers; neither supersedes the other.
 This is judgment-based coordination, not automatic UI parity. Server-only
 storage, migration, observability, and cryptographic hardening may remain
 backend-only. Native tray, global shortcut, clipboard-provider, filesystem,
 drag/drop, background service, and local image-rendering behavior may remain
-native-specific. Clipboard item semantics, sync, account/device state,
+native-specific. Clipboard item semantics, local text/image/file retention,
+lexical/vector search, sync, account/device state,
 application-vault rules, delegated transfers, errors, notifications,
 permissions, and navigation normally require coordinated changes or an
 explicit no-change rationale and parity follow-up.
@@ -125,3 +126,11 @@ and explicit user intent.
 
 See [`docs/CROSS_SURFACE_DELIVERY.md`](docs/CROSS_SURFACE_DELIVERY.md) and the
 [portfolio policy](https://github.com/ORESoftware/project-registry/blob/main/docs/cross-surface-delivery.md).
+
+## Environment secrets
+
+Secrets live in this repo **encrypted** with [sops](https://github.com/getsops/sops) + [age](https://github.com/FiloSottile/age):
+`env/enc/<dev|prod>.env.enc` is committed; `just env-use <name>` decrypts it to
+`env/dec/<name>.env` (gitignored, mode 0600) and symlinks `./.env` to it. The
+Nix dev shell provides the tooling, `just env-audit` runs keyless in CI, and
+containers decrypt at `docker run` — never at build. See [`env/README.md`](env/README.md).

@@ -4,7 +4,11 @@ Tracking: DEN-42, DEN-45, DEN-47, and DEN-51.
 
 ## Boundaries
 
-The Rust service, PostgreSQL/Supabase, and Cloudflare R2 are not trusted with clipboard plaintext or private key material. Flutter devices encrypt text, metadata, images, and files before upload. The backend stores public Signal Protocol prekeys, opaque recipient mailboxes, ciphertext manifests, KMS-encrypted recovery destinations, keyed OTP digests, and bounded routing metadata.
+The Rust service, PostgreSQL/Supabase, CockroachDB, and Cloudflare R2 are not trusted with clipboard plaintext, plaintext embeddings, local file paths, or private key material. Flutter and Rust desktop devices encrypt text, metadata, images, files, and opted-in embedding backup envelopes before upload. The backend stores public Signal Protocol prekeys, opaque recipient mailboxes, ciphertext manifests, KMS-encrypted recovery destinations, keyed OTP digests, and bounded routing metadata.
+
+Each desktop app owns an independent encrypted SQLite database and local search index. Text embeddings are fixed-width vectors stored and searched locally in SQLite; the cloud receives only an explicitly opted-in encrypted vector envelope and bounded dimensions. PostgreSQL/Supabase is the primary application desired state. The separate `cliptown_backup` schema from `ORESoftware/k8s-libs-and-shared-defs` is the portable PostgreSQL/CockroachDB backup desired state; both are converged by `declarative-migrations`, never by application-startup DDL.
+
+The shared-definitions repository remains authoritative. Because untrusted pull-request jobs cannot read that cross-organization private repository with `GITHUB_TOKEN`, this repository carries a byte-for-byte, SHA-256-pinned snapshot at `schema/portable-backup.sql`. Its provenance records an exact upstream revision, and CI rejects drift before running the pinned DPM revision against PostgreSQL 17 and CockroachDB 25. Updating the snapshot requires a reviewed upstream revision and fresh convergence evidence on both engines; it is not an independent schema fork.
 
 ## Device management
 
@@ -22,8 +26,10 @@ The backend is an authenticated but cryptographically untrusted public-prekey di
 
 ## Cloudflare R2
 
-Every object uses a fresh content key and chunked AEAD. Chunks have contiguous indices, independent nonces, ciphertext digests, and randomized storage keys. Presigned upload/download grants are short-lived, scoped to one user/object/chunk, and never expose a plaintext hash as the storage path. The manifest commits to the aggregate ciphertext digest, encrypted metadata, chunk order/sizes, and one wrapped content key per active recipient device.
+Every image or file object uses a fresh content key and chunked AEAD. Chunks have contiguous indices, independent nonces, ciphertext digests, and randomized storage keys. Presigned upload/download grants are short-lived, scoped to one user/object/chunk, and never expose a plaintext hash or local path as the storage key. The manifest commits to the aggregate ciphertext digest, encrypted metadata, chunk order/sizes, and one wrapped content key per active recipient device. Parent manifests, child chunks, wrapped keys, and upload sessions have explicit subject-owned PostgreSQL row-level policies.
+
+The reviewed manifest, grant, relational, and cross-engine convergence contracts are implemented. That does not establish live R2 delivery: promotion still requires authenticated ownership middleware, an R2 signer/provider adapter, a disposable-bucket upload/download/delete canary, ciphertext/redaction inspection, retry/idempotency coverage, and lifecycle cleanup evidence.
 
 ## Rollout gates
 
-Routes remain disabled until authentication and ownership middleware, KMS rotation, provider delivery, SeaORM repositories, declarative migration verification, RLS tests, R2 grant tests, redaction snapshots, Flutter secure storage/provider/UI, and multi-device E2E tests all pass.
+Routes remain disabled until authentication and ownership middleware, KMS rotation, provider delivery, SeaORM repositories, declarative migration verification, RLS tests, R2 grant tests, redaction snapshots, both desktop clients' secure-storage/provider/UI flows, mobile share/clipboard flows, and multi-device E2E tests all pass.

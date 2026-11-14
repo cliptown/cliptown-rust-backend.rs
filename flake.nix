@@ -20,6 +20,10 @@
           name = "agent-check";
           runtimeInputs =
             (with pkgs; [
+              # encrypted env files — env/enc/*.env.enc (sops + age), see env/README.md
+              sops
+              age
+              just
               actionlint
               bash
               binutils

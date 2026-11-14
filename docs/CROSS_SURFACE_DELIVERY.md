@@ -1,18 +1,22 @@
 # Cross-surface delivery
 
-Verified **2026-08-06**.
+Updated **2026-08-22**. Verification status is recorded per repository and exact
+commit; this document is a delivery requirement, not proof that every store or
+signed release has shipped.
 
 ## Surfaces
 
 - Rust API/backend: `cliptown/cliptown-rust-backend.rs`
-- Flutter Android/iOS, Flutter Web, and Flutter desktop: `cliptown/cliptown-flutter` — live
-- Rust desktop: `cliptown/cliptown-desktop.rs` — planned native GPUI/no-WebView app
+- Flutter Android/iOS, Flutter Web, and Flutter desktop: `cliptown/cliptown-flutter`
+- Rust desktop: `cliptown/cliptown-desktop.rs` — independent native GPUI/no-WebView product
 - MemeBank interop: `memebank/mbk-flutter` and `memebank/mbk-desktop.rs` when image-transfer behavior changes
 - Shared contracts: `cliptown-interfaces`, official clients, encrypted transfer manifests, Signal/device fixtures, routes, and conformance tests
 
 ## Judgment-based propagation
 
-Evaluate mobile, Flutter Web, Flutter desktop, GPUI desktop, MemeBank interop, and shared contracts for every user-visible or contract-changing backend change. Storage, migrations, observability, and cryptographic hardening may remain backend-only. Tray, shortcuts, clipboard providers, filesystem, drag/drop, background services, and native rendering may be native-specific. Clipboard item semantics, sync, account/device state, app-vault rules, delegated transfers, permissions, errors, notifications, and navigation normally propagate or require an explicit rationale and parity issue.
+The Flutter and Rust desktop apps are developed perpetually side by side. Neither is a prototype, fallback, rewrite target, or automatic replacement for the other. Evaluate Android, iOS, Flutter Web, Flutter desktop on Windows/macOS/Linux, native Rust desktop on Windows/macOS/Linux, MemeBank interop, and shared contracts for every user-visible or contract-changing backend change. Storage, migrations, observability, and cryptographic hardening may remain backend-only. Tray, shortcuts, clipboard providers, filesystem, drag/drop, background services, and native rendering may be implementation-specific. Clipboard item semantics, text/image/file history, configurable retention, lexical/vector search, local encryption, sync, account/device state, app-vault rules, delegated transfers, permissions, errors, notifications, and navigation normally propagate or require an explicit rationale and parity issue.
+
+Desktop pull requests must run both implementations against the same versioned fixture on Windows, macOS, and Linux. App-specific suites remain independent; the paired suite proves only shared externally observable semantics. Flutter additionally builds and tests Android and iOS. Promotion requires exact-commit artifacts, crash diagnostics, signed/notarized/package verification where applicable, and an explicit waiver for any unavailable real-device or store validation.
 
 ## Deep links and transfer boundaries
 
