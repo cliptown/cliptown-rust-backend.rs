@@ -8,6 +8,9 @@ use std::collections::{BTreeMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
+/// Maximum cloned sync records returned by one pull request.
+pub const MAX_PULL_PAGE_ITEMS: usize = 256;
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SyncCursor {
     pub server_sequence: u64,
@@ -193,8 +196,10 @@ impl SyncEngine {
     }
 
     pub fn pull(&self, after: SyncCursor, limit: usize) -> Result<PullPage, SyncError> {
-        if limit == 0 {
-            return Err(SyncError::InvalidMutation("pull limit must be positive"));
+        if limit == 0 || limit > MAX_PULL_PAGE_ITEMS {
+            return Err(SyncError::InvalidMutation(
+                "pull limit must be within 1..=256",
+            ));
         }
         if after.server_sequence > self.server_sequence {
             return Err(SyncError::InvalidMutation(
@@ -372,6 +377,34 @@ mod tests {
                 payload_digest: "a".repeat(64),
             },
         )
+    }
+
+    #[test]
+    fn pull_page_admission_is_bounded_without_mutating_sync_state() {
+        let mut engine = SyncEngine::new(8).unwrap();
+        engine.apply(upsert("mutation-1", 1, "device-a")).unwrap();
+        let previous = engine.clone();
+        assert_eq!(
+            engine.pull(SyncCursor::default(), 0),
+            Err(SyncError::InvalidMutation(
+                "pull limit must be within 1..=256"
+            ))
+        );
+        assert_eq!(
+            engine.pull(SyncCursor::default(), MAX_PULL_PAGE_ITEMS + 1),
+            Err(SyncError::InvalidMutation(
+                "pull limit must be within 1..=256"
+            ))
+        );
+        assert_eq!(engine, previous);
+        assert_eq!(
+            engine
+                .pull(SyncCursor::default(), MAX_PULL_PAGE_ITEMS)
+                .unwrap()
+                .mutations
+                .len(),
+            1
+        );
     }
 
     #[test]
