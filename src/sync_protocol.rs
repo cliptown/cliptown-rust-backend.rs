@@ -386,14 +386,25 @@ mod tests {
         let previous = engine.clone();
         assert_eq!(
             engine.pull(SyncCursor::default(), 0),
-            Err(SyncError::InvalidMutation("pull limit must be within 1..=256"))
+            Err(SyncError::InvalidMutation(
+                "pull limit must be within 1..=256"
+            ))
         );
         assert_eq!(
             engine.pull(SyncCursor::default(), MAX_PULL_PAGE_ITEMS + 1),
-            Err(SyncError::InvalidMutation("pull limit must be within 1..=256"))
+            Err(SyncError::InvalidMutation(
+                "pull limit must be within 1..=256"
+            ))
         );
         assert_eq!(engine, previous);
-        assert_eq!(engine.pull(SyncCursor::default(), MAX_PULL_PAGE_ITEMS).unwrap().mutations.len(), 1);
+        assert_eq!(
+            engine
+                .pull(SyncCursor::default(), MAX_PULL_PAGE_ITEMS)
+                .unwrap()
+                .mutations
+                .len(),
+            1
+        );
     }
 
     #[test]
