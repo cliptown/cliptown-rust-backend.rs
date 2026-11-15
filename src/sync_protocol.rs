@@ -316,9 +316,17 @@ fn validate_mutation(mutation: &SyncMutation) -> Result<(), SyncError> {
                 "payload digest must be 64 hexadecimal characters",
             ))
         }
-        MutationKind::DeviceRevoked { revoked_device_id } if revoked_device_id.is_empty() => Err(
-            SyncError::InvalidMutation("revoked device identifier is empty"),
-        ),
+        MutationKind::DeviceRevoked { revoked_device_id }
+            if revoked_device_id.is_empty()
+                || revoked_device_id.len() > 128
+                || !revoked_device_id.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+                }) =>
+        {
+            Err(SyncError::InvalidMutation(
+                "revoked device identifier is invalid",
+            ))
+        }
         MutationKind::KeyRotated { key_version: 0 } => Err(SyncError::InvalidMutation(
             "key rotation version must be positive",
         )),
@@ -372,6 +380,31 @@ mod tests {
                 payload_digest: "a".repeat(64),
             },
         )
+    }
+
+    #[test]
+    fn rejected_device_ids_never_advance_sync_state() {
+        let engine = SyncEngine::new(8).unwrap();
+        for revoked_device_id in [
+            String::new(),
+            "x".repeat(129),
+            "device-a\nsecret".to_string(),
+            "device/other".to_string(),
+        ] {
+            let candidate = mutation(
+                "revoke-1",
+                "clip-1",
+                1,
+                "device-a",
+                MutationKind::DeviceRevoked { revoked_device_id },
+            );
+            assert!(matches!(
+                engine.transitioned(candidate),
+                Err(SyncError::InvalidMutation(_))
+            ));
+            assert_eq!(engine.cursor().server_sequence, 0);
+            assert_eq!(engine.retained_replays(), 0);
+        }
     }
 
     #[test]
